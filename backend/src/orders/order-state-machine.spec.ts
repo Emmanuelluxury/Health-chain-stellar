@@ -23,6 +23,11 @@ describe('OrderStateMachine', () => {
       [OrderStatus.DISPATCHED, OrderStatus.CANCELLED],
       [OrderStatus.IN_TRANSIT, OrderStatus.DELIVERED],
       [OrderStatus.IN_TRANSIT, OrderStatus.CANCELLED],
+      [OrderStatus.IN_TRANSIT, OrderStatus.DISPUTED],
+      [OrderStatus.DELIVERED, OrderStatus.DISPUTED],
+      [OrderStatus.DISPUTED, OrderStatus.RESOLVED],
+      [OrderStatus.RESOLVED, OrderStatus.DELIVERED],
+      [OrderStatus.RESOLVED, OrderStatus.CANCELLED],
     ];
 
     it.each(validCases)(
@@ -124,15 +129,31 @@ describe('OrderStateMachine', () => {
       ]);
     });
 
-    it('returns [DELIVERED, CANCELLED] for IN_TRANSIT', () => {
+    it('returns [DELIVERED, CANCELLED, DISPUTED] for IN_TRANSIT', () => {
       expect(sm.getAllowedTransitions(OrderStatus.IN_TRANSIT)).toEqual([
         OrderStatus.DELIVERED,
         OrderStatus.CANCELLED,
+        OrderStatus.DISPUTED,
       ]);
     });
 
-    it('returns [] for DELIVERED (terminal state)', () => {
-      expect(sm.getAllowedTransitions(OrderStatus.DELIVERED)).toEqual([]);
+    it('returns [DISPUTED] for DELIVERED', () => {
+      expect(sm.getAllowedTransitions(OrderStatus.DELIVERED)).toEqual([
+        OrderStatus.DISPUTED,
+      ]);
+    });
+
+    it('returns [RESOLVED] for DISPUTED', () => {
+      expect(sm.getAllowedTransitions(OrderStatus.DISPUTED)).toEqual([
+        OrderStatus.RESOLVED,
+      ]);
+    });
+
+    it('returns [DELIVERED, CANCELLED] for RESOLVED', () => {
+      expect(sm.getAllowedTransitions(OrderStatus.RESOLVED)).toEqual([
+        OrderStatus.DELIVERED,
+        OrderStatus.CANCELLED,
+      ]);
     });
 
     it('returns [] for CANCELLED (terminal state)', () => {

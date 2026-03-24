@@ -120,6 +120,29 @@ export class OrdersController {
     return this.ordersService.assignRider(id, riderId, actorId);
   }
 
+  @RequirePermissions(Permission.UPDATE_ORDER)
+  @Patch(':id/raise-dispute')
+  raiseDispute(
+    @Param('id') id: string,
+    @Body('reason') reason: string,
+    @Body('disputeId') disputeId: string,
+    @Request() req: any,
+  ) {
+    const actorId: string | undefined = req.user?.id;
+    return this.ordersService.raiseDispute(id, reason, disputeId, actorId);
+  }
+
+  @RequirePermissions(Permission.UPDATE_ORDER) // Admin or specialized permission
+  @Patch(':id/resolve-dispute')
+  resolveDispute(
+    @Param('id') id: string,
+    @Body('resolution') resolution: string,
+    @Request() req: any,
+  ) {
+    const actorId: string | undefined = req.user?.id;
+    return this.ordersService.resolveDispute(id, resolution, actorId);
+  }
+
   @RequirePermissions(Permission.DELETE_ORDER)
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)

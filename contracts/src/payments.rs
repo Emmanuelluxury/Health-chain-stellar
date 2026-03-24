@@ -8,12 +8,52 @@ pub enum PaymentStatus {
     Pending,
     /// Payment funds locked in escrow
     Escrowed,
+    /// Payment is under dispute
+    Disputed,
+    /// Payment dispute has been resolved
+    Resolved,
     /// Payment successfully completed and funds transferred
     Completed,
     /// Payment refunded to payer
     Refunded,
     /// Payment cancelled before escrow
     Cancelled,
+}
+
+/// Represents the status of a dispute
+#[contracttype]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DisputeStatus {
+    /// Dispute initiated by a party
+    Open,
+    /// Dispute resolved in favor of the payer (refund)
+    ResolvedInFavorOfPayer,
+    /// Dispute resolved in favor of the payee (payout)
+    ResolvedInFavorOfPayee,
+    /// Dispute dismissed without change
+    Dismissed,
+}
+
+/// Dispute record for delivery issues
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Dispute {
+    /// Unique dispute identifier
+    pub id: u64,
+    /// Associated payment ID
+    pub payment_id: u64,
+    /// Party who raised the dispute
+    pub raised_by: Address,
+    /// Current status of the dispute
+    pub status: DisputeStatus,
+    /// Reason for the dispute (short description)
+    pub reason: Symbol,
+    /// Hash or ID for external evidence (IPFS CID, etc)
+    pub evidence_hash: Symbol,
+    /// Timestamp when dispute was raised
+    pub raised_at: u64,
+    /// Timestamp when dispute was resolved
+    pub resolved_at: Option<u64>,
 }
 
 /// Conditions that must be met before escrow funds can be released
@@ -120,9 +160,17 @@ impl Payment {
             (PaymentStatus::Pending, PaymentStatus::Escrowed) => true,
             (PaymentStatus::Pending, PaymentStatus::Cancelled) => true,
 
-            // Escrowed can go to Completed or Refunded
+            // Escrowed can go to Completed, Refunded or Disputed
             (PaymentStatus::Escrowed, PaymentStatus::Completed) => true,
             (PaymentStatus::Escrowed, PaymentStatus::Refunded) => true,
+            (PaymentStatus::Escrowed, PaymentStatus::Disputed) => true,
+
+            // Disputed can go to Resolved
+            (PaymentStatus::Disputed, PaymentStatus::Resolved) => true,
+
+            // Resolved can go to Completed or Refunded
+            (PaymentStatus::Resolved, PaymentStatus::Completed) => true,
+            (PaymentStatus::Resolved, PaymentStatus::Refunded) => true,
 
             // Terminal states cannot transition
             (PaymentStatus::Completed, _) => false,

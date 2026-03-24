@@ -125,9 +125,54 @@ fn payment_state_machine_is_correct() {
         escrow_released_at: None,
     };
 
-    assert!(payment.can_transition_to(PaymentStatus::Escrowed));
     assert!(payment.can_transition_to(PaymentStatus::Cancelled));
+    assert!(payment.can_transition_to(PaymentStatus::Escrowed));
     assert!(!payment.can_transition_to(PaymentStatus::Completed));
+
+    // From Escrowed
+    let escrowed_payment = Payment {
+        status: PaymentStatus::Escrowed,
+        ..payment.clone()
+    };
+    assert!(escrowed_payment.can_transition_to(PaymentStatus::Disputed));
+    assert!(escrowed_payment.can_transition_to(PaymentStatus::Completed));
+    assert!(escrowed_payment.can_transition_to(PaymentStatus::Refunded));
+
+    // From Disputed
+    let disputed_payment = Payment {
+        status: PaymentStatus::Disputed,
+        ..payment.clone()
+    };
+    assert!(disputed_payment.can_transition_to(PaymentStatus::Resolved));
+    assert!(!disputed_payment.can_transition_to(PaymentStatus::Completed));
+
+    // From Resolved
+    let resolved_payment = Payment {
+        status: PaymentStatus::Resolved,
+        ..payment.clone()
+    };
+    assert!(resolved_payment.can_transition_to(PaymentStatus::Completed));
+    assert!(resolved_payment.can_transition_to(PaymentStatus::Refunded));
+}
+
+#[test]
+fn dispute_structure_is_valid() {
+    let env = Env::default();
+    let raiser = Address::generate(&env);
+    use crate::payments::{Dispute, DisputeStatus};
+
+    let dispute = Dispute {
+        id: 1,
+        payment_id: 10,
+        raised_by: raiser,
+        status: DisputeStatus::Open,
+        reason: Symbol::new(&env, "delayed"),
+        evidence_hash: Symbol::new(&env, "hash123"),
+        raised_at: 1000,
+        resolved_at: None,
+    };
+
+    assert_eq!(dispute.status, DisputeStatus::Open);
 }
 
 #[test]

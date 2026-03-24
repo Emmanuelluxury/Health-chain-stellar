@@ -28,6 +28,8 @@ import {
   OrderDispatchedEvent,
   OrderInTransitEvent,
   OrderDeliveredEvent,
+  OrderDisputedEvent,
+  OrderResolvedEvent,
 } from '../events';
 import { InventoryService } from '../inventory/inventory.service';
 
@@ -39,6 +41,8 @@ const STATUS_TO_EVENT_TYPE: Record<OrderStatus, OrderEventType> = {
   [OrderStatus.IN_TRANSIT]: OrderEventType.ORDER_IN_TRANSIT,
   [OrderStatus.DELIVERED]: OrderEventType.ORDER_DELIVERED,
   [OrderStatus.CANCELLED]: OrderEventType.ORDER_CANCELLED,
+  [OrderStatus.DISPUTED]: OrderEventType.ORDER_DISPUTED,
+  [OrderStatus.RESOLVED]: OrderEventType.ORDER_RESOLVED,
 };
 
 @Injectable()
@@ -304,6 +308,28 @@ export class OrdersService {
     return { message: 'Rider assigned successfully', data: { orderId, riderId } };
   }
 
+  async raiseDispute(orderId: string, reason: string, disputeId: string, actorId?: string) {
+    const order = await this.findOrderOrFail(orderId);
+    order.disputeId = disputeId;
+    order.disputeReason = reason;
+    await this.orderRepo.save(order);
+
+    return this.transitionStatus(orderId, OrderStatus.DISPUTED, actorId);
+  }
+
+  async resolveDispute(orderId: string, resolution: string, actorId?: string) {
+    // We can transition to RESOLVED first, or directly to terminal state if desired.
+    // For now, let's transition to RESOLVED.
+    await this.transitionStatus(orderId, OrderStatus.RESOLVED, actorId);
+    
+    // Then handle final state based on resolution (simplified logic)
+    if (resolution === 'REFUND') {
+      return this.transitionStatus(orderId, OrderStatus.CANCELLED, actorId);
+    } else {
+      return this.transitionStatus(orderId, OrderStatus.DELIVERED, actorId);
+    }
+  }
+
   // ─── Core state-transition pipeline ──────────────────────────────────────
 
   /**
@@ -405,6 +431,20 @@ export class OrdersService {
         this.eventEmitter.emit(
           'order.delivered',
           new OrderDeliveredEvent(order.id),
+        );
+        break;
+
+      case OrderStatus.DISPUTED:
+        this.eventEmitter.emit(
+          'order.disputed',
+          new OrderDisputedEvent(order.id, order.disputeId ?? '', order.disputeReason ?? ''),
+        );
+        break;
+
+      case OrderStatus.RESOLVED:
+        this.eventEmitter.emit(
+          'order.resolved',
+          new OrderResolvedEvent(order.id, 'Resolved'),
         );
         break;
 

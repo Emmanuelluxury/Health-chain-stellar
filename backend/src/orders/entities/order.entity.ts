@@ -37,6 +37,12 @@ export class OrderEntity {
   @Column({ name: 'rider_id', nullable: true, type: 'varchar' })
   riderId: string | null;
 
+  @Column({ name: 'dispute_id', nullable: true, type: 'varchar' })
+  disputeId: string | null;
+
+  @Column({ name: 'dispute_reason', nullable: true, type: 'text' })
+  disputeReason: string | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

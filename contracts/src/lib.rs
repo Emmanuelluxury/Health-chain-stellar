@@ -6,6 +6,8 @@ use soroban_sdk::{
 
 pub mod constants;
 pub mod payments;
+use crate::payments::*;
+
 pub mod registry_read;
 pub mod registry_write;
 #[cfg(test)]
@@ -38,6 +40,11 @@ pub enum Error {
     TransferExpired = 16,
     /// Transfer has not yet exceeded its allowed time window.
     TransferNotExpired = 17,
+    PaymentNotFound = 18,
+    DisputeNotFound = 19,
+    InvalidDisputeStatus = 20,
+    DisputeAlreadyExists = 21,
+    InvalidPaymentStatus = 22,
     /// Unit ID string exceeds maximum allowed length.
     UnitIdTooLong = 18,
 }
@@ -166,6 +173,8 @@ pub enum RequestStatus {
     Approved,
     InProgress,
     Fulfilled,
+    Disputed,
+    Resolved,
     Cancelled,
     Rejected,
 }
@@ -249,6 +258,53 @@ pub struct RequestStatusChangeEvent {
     pub reason: Option<String>,
 }
 
+/// Event data for dispute raised
+#[contracttype]
+#[derive(Clone)]
+pub struct DisputeRaisedEvent {
+    pub dispute_id: u64,
+    pub payment_id: u64,
+    pub raised_by: Address,
+    pub reason: Symbol,
+    pub timestamp: u64,
+}
+
+/// Event data for dispute resolved
+#[contracttype]
+#[derive(Clone)]
+pub struct DisputeResolvedEvent {
+    pub dispute_id: u64,
+    pub payment_id: u64,
+    pub status: DisputeStatus,
+    pub resolved_at: u64,
+}
+
+/// Storage keys
+const BLOOD_UNITS: Symbol = symbol_short!("UNITS");
+const NEXT_ID: Symbol = symbol_short!("NEXT_ID");
+const BLOOD_BANKS: Symbol = symbol_short!("BANKS");
+const HOSPITALS: Symbol = symbol_short!("HOSPS");
+const ADMIN: Symbol = symbol_short!("ADMIN");
+const REQUESTS: Symbol = symbol_short!("REQUESTS");
+const NEXT_REQUEST_ID: Symbol = symbol_short!("NEXT_REQ");
+const REQUEST_KEYS: Symbol = symbol_short!("REQ_KEYS");
+const BLOOD_REQUESTS: Symbol = symbol_short!("REQS");
+const PAYMENTS: Symbol = symbol_short!("PAY_RECS");
+const NEXT_PAYMENT_ID: Symbol = symbol_short!("NPAY_ID");
+const DISPUTES: Symbol = symbol_short!("DISP_REC");
+const NEXT_DISPUTE_ID: Symbol = symbol_short!("NDIS_ID");
+
+// Validation constants
+const MIN_QUANTITY_ML: u32 = 50; // Minimum 50ml
+const MAX_QUANTITY_ML: u32 = 500; // Maximum 500ml per unit
+const MIN_SHELF_LIFE_DAYS: u64 = 1; // At least 1 day shelf life
+const MAX_SHELF_LIFE_DAYS: u64 = 42; // Maximum 42 days for whole blood
+const MIN_REQUEST_ML: u32 = 50; // Minimum request amount
+const MAX_REQUEST_ML: u32 = 5000; // Maximum request amount
+const MAX_BATCH_SIZE: u32 = 100; // Maximum batch size for operations
+
+// Transfer expiry window (30 minutes)
+const TRANSFER_EXPIRY_SECONDS: u64 = 1800;
 /// Storage key enumeration for composite keys
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -907,6 +963,8 @@ impl HealthChainContract {
 
         // Emit event
         env.events().publish(
+            (symbol_short!("blood"), symbol_short!("tr_cancel")),
+            (unit_id, current_time),
             (symbol_short!("custody"), symbol_short!("cancel")),
             custody_event,
         );
@@ -1463,6 +1521,213 @@ impl HealthChainContract {
         Ok(request_id)
     }
 
+    /// Create a payment for a request
+    pub fn create_payment(
+        env: Env,
+        request_id: u64,
+        payer: Address,
+        payee: Address,
+        amount: i128,
+        asset: Address,
+    ) -> Result<u64, Error> {
+        payer.require_auth();
+
+        let mut payments: Map<u64, Payment> = env
+            .storage()
+            .persistent()
+            .get(&PAYMENTS)
+            .unwrap_or(Map::new(&env));
+
+        let payment_id = env
+            .storage()
+            .instance()
+            .get(&NEXT_PAYMENT_ID)
+            .unwrap_or(1u64);
+
+        let payment = Payment {
+            id: payment_id,
+            request_id,
+            payer,
+            payee,
+            amount,
+            asset,
+            status: PaymentStatus::Pending,
+            escrow_released_at: None,
+        };
+
+        if let Err(_) = payment.validate() {
+            return Err(Error::StorageError);
+        }
+
+        payments.set(payment_id, payment);
+        env.storage().persistent().set(&PAYMENTS, &payments);
+        env.storage().instance().set(&NEXT_PAYMENT_ID, &(payment_id + 1));
+
+        Ok(payment_id)
+    }
+
+    /// Raise a dispute for a payment
+    pub fn raise_dispute(
+        env: Env,
+        payment_id: u64,
+        raised_by: Address,
+        reason: Symbol,
+        evidence_hash: Symbol,
+    ) -> Result<u64, Error> {
+        raised_by.require_auth();
+
+        let mut payments: Map<u64, Payment> = env
+            .storage()
+            .persistent()
+            .get(&PAYMENTS)
+            .ok_or(Error::PaymentNotFound)?;
+
+        let mut payment = payments.get(payment_id).ok_or(Error::PaymentNotFound)?;
+
+        if !payment.can_transition_to(PaymentStatus::Disputed) {
+            return Err(Error::InvalidTransition);
+        }
+
+        let dispute_id = env
+            .storage()
+            .instance()
+            .get(&NEXT_DISPUTE_ID)
+            .unwrap_or(1u64);
+
+        let dispute = Dispute {
+            id: dispute_id,
+            payment_id,
+            raised_by: raised_by.clone(),
+            status: DisputeStatus::Open,
+            reason: reason.clone(),
+            evidence_hash,
+            raised_at: env.ledger().timestamp(),
+            resolved_at: None,
+        };
+
+        payment.status = PaymentStatus::Disputed;
+        payments.set(payment_id, payment.clone());
+        env.storage().persistent().set(&PAYMENTS, &payments);
+
+        let mut disputes: Map<u64, Dispute> = env
+            .storage()
+            .persistent()
+            .get(&DISPUTES)
+            .unwrap_or(Map::new(&env));
+
+        disputes.set(dispute_id, dispute);
+        env.storage().persistent().set(&DISPUTES, &disputes);
+        env.storage().instance().set(&NEXT_DISPUTE_ID, &(dispute_id + 1));
+
+        // Update Request Status if possible
+        let mut requests: Map<u64, BloodRequest> = env
+            .storage()
+            .persistent()
+            .get(&REQUESTS)
+            .unwrap_or(Map::new(&env));
+
+        if let Some(mut request) = requests.get(payment.request_id) {
+            request.status = RequestStatus::Disputed;
+            requests.set(payment.request_id, request);
+            env.storage().persistent().set(&REQUESTS, &requests);
+        }
+
+        // Emit DisputeRaisedEvent
+        env.events().publish(
+            (symbol_short!("dispute"), symbol_short!("raised")),
+            DisputeRaisedEvent {
+                dispute_id,
+                payment_id,
+                raised_by,
+                reason,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(dispute_id)
+    }
+
+    /// Resolve a dispute (admin only)
+    pub fn resolve_dispute(
+        env: Env,
+        dispute_id: u64,
+        resolution: DisputeStatus,
+    ) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&ADMIN)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        let mut disputes: Map<u64, Dispute> = env
+            .storage()
+            .persistent()
+            .get(&DISPUTES)
+            .ok_or(Error::DisputeNotFound)?;
+
+        let mut dispute = disputes.get(dispute_id).ok_or(Error::DisputeNotFound)?;
+
+        if dispute.status != DisputeStatus::Open {
+            return Err(Error::InvalidDisputeStatus);
+        }
+
+        let mut payments: Map<u64, Payment> = env
+            .storage()
+            .persistent()
+            .get(&PAYMENTS)
+            .ok_or(Error::PaymentNotFound)?;
+
+        let mut payment = payments.get(dispute.payment_id).ok_or(Error::PaymentNotFound)?;
+
+        dispute.status = resolution;
+        dispute.resolved_at = Some(env.ledger().timestamp());
+        disputes.set(dispute_id, dispute.clone());
+        env.storage().persistent().set(&DISPUTES, &disputes);
+
+        payment.status = PaymentStatus::Resolved;
+        
+        // Handle funds based on resolution
+        match resolution {
+            DisputeStatus::ResolvedInFavorOfPayer => {
+                payment.status = PaymentStatus::Refunded;
+            }
+            DisputeStatus::ResolvedInFavorOfPayee => {
+                payment.status = PaymentStatus::Completed;
+            }
+            _ => {}
+        }
+
+        payments.set(dispute.payment_id, payment.clone());
+        env.storage().persistent().set(&PAYMENTS, &payments);
+
+        // Update Request Status
+        let mut requests: Map<u64, BloodRequest> = env
+            .storage()
+            .persistent()
+            .get(&REQUESTS)
+            .unwrap_or(Map::new(&env));
+
+        if let Some(mut request) = requests.get(payment.request_id) {
+            request.status = RequestStatus::Resolved;
+            requests.set(payment.request_id, request);
+            env.storage().persistent().set(&REQUESTS, &requests);
+        }
+
+        // Emit DisputeResolvedEvent
+        env.events().publish(
+            (symbol_short!("dispute"), symbol_short!("resolved")),
+            DisputeResolvedEvent {
+                dispute_id,
+                payment_id: dispute.payment_id,
+                status: resolution,
+                resolved_at: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(())
+    }
+
     /// Update request status
     pub fn update_request_status(
         env: Env,
@@ -1848,7 +2113,7 @@ mod test {
     use soroban_sdk::IntoVal;
     use soroban_sdk::{
         symbol_short, testutils::Address as _, testutils::Events, testutils::Ledger as _, Address,
-        Env, String, Symbol, TryFromVal,
+        Env, IntoVal, String, Symbol, TryFromVal,
     };
 
     fn setup_contract_with_admin(env: &Env) -> (Address, Address, HealthChainContractClient<'_>) {
