@@ -14,6 +14,7 @@ import { RoleEntity } from './entities/role.entity';
 import { RolePermissionEntity } from './entities/role-permission.entity';
 import { RedisModule } from '../redis/redis.module';
 import { UserEntity } from '../users/entities/user.entity';
+import { UserActivityModule } from '../user-activity/user-activity.module';
 
 @Module({
   imports: [
@@ -33,6 +34,7 @@ import { UserEntity } from '../users/entities/user.entity';
     }),
     TypeOrmModule.forFeature([RoleEntity, RolePermissionEntity, UserEntity]),
     RedisModule,
+    UserActivityModule,
   ],
   controllers: [AuthController],
   providers: [

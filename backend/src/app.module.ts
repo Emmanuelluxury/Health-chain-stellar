@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
@@ -17,6 +17,9 @@ import { BloodUnitsModule } from './blood-units/blood-units.module';
 import { BullModule } from '@nestjs/bullmq';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from './auth/guards/permissions.guard';
+import { ScheduleModule } from '@nestjs/schedule';
+import { UserActivityModule } from './user-activity/user-activity.module';
+import { ActivityLoggingInterceptor } from './user-activity/interceptors/activity-logging.interceptor';
 
 @Module({
   imports: [
@@ -24,6 +27,7 @@ import { PermissionsGuard } from './auth/guards/permissions.guard';
       isGlobal: true,
       envFilePath: '.env',
     }),
+    ScheduleModule.forRoot(),
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -61,6 +65,7 @@ import { PermissionsGuard } from './auth/guards/permissions.guard';
       }),
     }),
     NotificationsModule,
+    UserActivityModule,
   ],
   controllers: [AppController],
   providers: [
@@ -69,6 +74,7 @@ import { PermissionsGuard } from './auth/guards/permissions.guard';
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     /** Permission enforcement applied globally; use @RequirePermissions() to specify */
     { provide: APP_GUARD, useClass: PermissionsGuard },
+    { provide: APP_INTERCEPTOR, useClass: ActivityLoggingInterceptor },
   ],
 })
 export class AppModule {}
