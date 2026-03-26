@@ -16,6 +16,11 @@ import { Server } from '@stellar/stellar-sdk/rpc';
 import * as SorobanRpc from '@stellar/stellar-sdk/rpc';
 import { Repository } from 'typeorm';
 
+import {
+  assertRegisterBloodUnitIds,
+  assertTransferCustodyIds,
+  assertLogTemperatureIds,
+} from '../common/guards/on-chain-id.guard';
 import { BlockchainEvent } from './entities/blockchain-event.entity';
 import {
   ContractError,
@@ -92,6 +97,7 @@ export class SorobanService implements OnModuleInit {
     expirationTimestamp: number;
     donorId?: string;
   }): Promise<{ transactionHash: string; unitId: number }> {
+    assertRegisterBloodUnitIds(params);
     return this.executeWithRetry(async () => {
       const bloodTypeEnum = this.mapBloodType(params.bloodType);
 
@@ -150,6 +156,7 @@ export class SorobanService implements OnModuleInit {
     toAccount: string;
     condition: string;
   }): Promise<{ transactionHash: string }> {
+    assertTransferCustodyIds(params);
     return this.executeWithRetry(async () => {
       const account = await this.server.getAccount(
         this.sourceKeypair.publicKey(),
@@ -208,6 +215,7 @@ export class SorobanService implements OnModuleInit {
     timestamp: number;
     bloodType?: string;
   }): Promise<{ transactionHash: string }> {
+    assertLogTemperatureIds(params);
     return this.executeWithRetry(async () => {
       const bloodType = params.bloodType ?? 'O+';
       const threshold = get_threshold_or_default(

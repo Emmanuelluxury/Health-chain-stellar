@@ -2,6 +2,9 @@ import { InjectQueue } from '@nestjs/bull';
 import { Injectable, Logger } from '@nestjs/common';
 
 import {
+  assertSorobanTxJob,
+} from '../../common/guards/on-chain-id.guard';
+import {
   SorobanTxJob,
   SorobanTxResult,
   QueueMetrics,
@@ -33,6 +36,8 @@ export class SorobanService {
    * @throws Error if idempotency key already exists (duplicate submission)
    */
   async submitTransaction(job: SorobanTxJob): Promise<string> {
+    assertSorobanTxJob(job);
+
     // Enforce idempotency: prevent duplicate submissions
     const isNew = await this.idempotencyService.checkAndSetIdempotencyKey(
       job.idempotencyKey,
