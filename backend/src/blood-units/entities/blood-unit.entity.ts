@@ -5,7 +5,15 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   Index,
+  OneToMany,
+  BaseEntity,
 } from 'typeorm';
+
+import { BloodComponent } from '../enums/blood-component.enum';
+import { BloodStatus } from '../enums/blood-status.enum';
+import { BloodType } from '../enums/blood-type.enum';
+
+import { BloodStatusHistory } from './blood-status-history.entity';
 
 @Entity('blood_units')
 @Index(['unitNumber'], { unique: true })
@@ -51,13 +59,8 @@ export class BloodUnitEntity {
   createdAt: Date;
 
   @UpdateDateColumn()
-  OneToMany,
-  BaseEntity,
-} from 'typeorm';
-import { BloodType } from '../enums/blood-type.enum';
-import { BloodStatus } from '../enums/blood-status.enum';
-import { BloodComponent } from '../enums/blood-component.enum';
-import { BloodStatusHistory } from './blood-status-history.entity';
+  updatedAt: Date;
+}
 
 @Entity('blood_units')
 @Index('idx_blood_units_blood_type', ['bloodType'])
@@ -120,6 +123,12 @@ export class BloodUnit extends BaseEntity {
 
   @Column({ name: 'blockchain_tx_hash', type: 'varchar', nullable: true })
   blockchainTxHash: string | null;
+
+  @Column({ name: 'reserved_for', type: 'varchar', nullable: true })
+  reservedFor: string | null;
+
+  @Column({ name: 'reserved_until', type: 'timestamp', nullable: true })
+  reservedUntil: Date | null;
 
   @OneToMany(() => BloodStatusHistory, (history) => history.bloodUnit, {
     cascade: true,

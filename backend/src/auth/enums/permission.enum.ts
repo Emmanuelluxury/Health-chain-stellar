@@ -30,6 +30,8 @@ export enum Permission {
   REGISTER_BLOOD_UNIT = 'register:bloodunit',
   TRANSFER_CUSTODY = 'transfer:custody',
   LOG_TEMPERATURE = 'log:temperature',
+  UPDATE_BLOOD_STATUS = 'update:blood-status',
+  VIEW_BLOOD_STATUS_HISTORY = 'view:blood-status-history',
 
   // ── Dispatch ─────────────────────────────────────────────────────────
   VIEW_DISPATCH = 'view:dispatch',
