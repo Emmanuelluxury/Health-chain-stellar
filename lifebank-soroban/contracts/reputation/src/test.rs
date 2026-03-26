@@ -19,6 +19,90 @@ fn client<'a>(env: &'a Env, cid: &'a Address) -> ReputationContractClient<'a> {
     ReputationContractClient::new(env, cid)
 }
 
+#[test]
+fn test_initialize_sets_default_configuration() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let cid = env.register(ReputationContract, ());
+    let c = client(&env, &cid);
+
+    c.initialize(&admin);
+
+    assert!(c.is_initialized());
+    assert_eq!(c.get_admin(), admin);
+    assert_eq!(
+        c.get_rating_scale_config(),
+        RatingScaleConfig {
+            min_rating: DEFAULT_MIN_RATING,
+            max_rating: DEFAULT_MAX_RATING,
+        }
+    );
+    assert_eq!(
+        c.get_decay_config(),
+        DecayConfig {
+            decay_period_secs: DECAY_PERIOD_SECS,
+            max_decay: MAX_DECAY,
+            rating_half_life_secs: HALF_LIFE_SECS,
+        }
+    );
+    assert_eq!(c.get_minimum_interactions(), DEFAULT_MIN_INTERACTIONS);
+    assert_eq!(
+        c.get_badge_config(),
+        BadgeConfig {
+            enabled: true,
+            min_score_for_badge: DEFAULT_BADGE_MIN_SCORE,
+            min_interactions_for_badge: DEFAULT_BADGE_MIN_INTERACTIONS,
+        }
+    );
+}
+
+#[test]
+fn test_initialize_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let cid = env.register(ReputationContract, ());
+    let c = client(&env, &cid);
+
+    c.initialize(&admin);
+
+    assert_eq!(env.events().all().len(), 1);
+}
+
+#[test]
+fn test_initialize_cannot_run_twice() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let cid = env.register(ReputationContract, ());
+    let c = client(&env, &cid);
+
+    c.initialize(&admin);
+
+    assert_eq!(c.try_initialize(&admin), Err(Ok(Error::AlreadyInitialized)));
+}
+
+#[test]
+fn test_init_getters_fail_before_initialization() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let cid = env.register(ReputationContract, ());
+    let c = client(&env, &cid);
+
+    assert_eq!(c.try_get_admin(), Err(Ok(Error::NotInitialized)));
+    assert_eq!(
+        c.try_get_rating_scale_config(),
+        Err(Ok(Error::NotInitialized))
+    );
+    assert_eq!(c.try_get_decay_config(), Err(Ok(Error::NotInitialized)));
+    assert_eq!(
+        c.try_get_minimum_interactions(),
+        Err(Ok(Error::NotInitialized))
+    );
+    assert_eq!(c.try_get_badge_config(), Err(Ok(Error::NotInitialized)));
+}
+
 // ── submit_rating validation ───────────────────────────────────────────────────
 
 #[test]
@@ -548,6 +632,7 @@ fn test_poor_performer_gets_low_score() {
 #[test]
 fn test_admin_initialization() {
     let env = Env::default();
+    env.mock_all_auths();
     let admin = Address::generate(&env);
     let cid = env.register(ReputationContract, ());
     let c = client(&env, &cid);

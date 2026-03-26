@@ -1,5 +1,7 @@
 #![no_std]
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, symbol_short, Env, Vec};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, Vec,
+};
 
 // ── Constants (all arithmetic is integer, scaled ×100 for two decimal places) ──
 
@@ -37,6 +39,12 @@ const PENALTY_SERIOUS: i64 = 40_00;
 
 /// Recovery: penalties expire after 60 days
 const PENALTY_EXPIRY_SECS: u64 = 60 * 24 * 3600;
+
+const DEFAULT_MIN_RATING: i64 = 1;
+const DEFAULT_MAX_RATING: i64 = 5;
+const DEFAULT_MIN_INTERACTIONS: u32 = 3;
+const DEFAULT_BADGE_MIN_SCORE: i64 = 80_00;
+const DEFAULT_BADGE_MIN_INTERACTIONS: u32 = 10;
 
 
 /// Violation types for penalties
@@ -115,6 +123,29 @@ pub struct ReputationScore {
     pub penalty_points: i64,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RatingScaleConfig {
+    pub min_rating: i64,
+    pub max_rating: i64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DecayConfig {
+    pub decay_period_secs: u64,
+    pub max_decay: i64,
+    pub rating_half_life_secs: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BadgeConfig {
+    pub enabled: bool,
+    pub min_score_for_badge: i64,
+    pub min_interactions_for_badge: u32,
+}
+
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u32)]
@@ -124,6 +155,8 @@ pub enum Error {
     EntityNotFound = 402,
     NotAuthorized = 403,
     PenaltyNotFound = 404,
+    AlreadyInitialized = 405,
+    NotInitialized = 406,
 }
 
 /// Storage key for persisted reputation scores.
@@ -133,6 +166,10 @@ pub enum DataKey {
     Score(u64),   // entity_id → ReputationScore
     Input(u64),   // entity_id → ReputationInput
     Admin,        // Address → Admin identity
+    RatingScaleConfig,
+    DecayConfig,
+    MinimumInteractions,
+    BadgeConfig,
 }
 
 // ── Contract ───────────────────────────────────────────────────────────────────
@@ -142,13 +179,89 @@ pub struct ReputationContract;
 
 #[contractimpl]
 impl ReputationContract {
+    /// Initialize the contract with the default configuration.
+    pub fn initialize(env: Env, admin: Address) -> Result<(), Error> {
+        admin.require_auth();
 
-    /// Initialize the contract with an admin.
-    pub fn init(env: Env, admin: soroban_sdk::Address) {
-        if env.storage().instance().has(&DataKey::Admin) {
-            panic!("already initialized");
+        if Self::is_initialized(env.clone()) {
+            return Err(Error::AlreadyInitialized);
         }
+
         env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage().instance().set(
+            &DataKey::RatingScaleConfig,
+            &RatingScaleConfig {
+                min_rating: DEFAULT_MIN_RATING,
+                max_rating: DEFAULT_MAX_RATING,
+            },
+        );
+        env.storage().instance().set(
+            &DataKey::DecayConfig,
+            &DecayConfig {
+                decay_period_secs: DECAY_PERIOD_SECS,
+                max_decay: MAX_DECAY,
+                rating_half_life_secs: HALF_LIFE_SECS,
+            },
+        );
+        env.storage()
+            .instance()
+            .set(&DataKey::MinimumInteractions, &DEFAULT_MIN_INTERACTIONS);
+        env.storage().instance().set(
+            &DataKey::BadgeConfig,
+            &BadgeConfig {
+                enabled: true,
+                min_score_for_badge: DEFAULT_BADGE_MIN_SCORE,
+                min_interactions_for_badge: DEFAULT_BADGE_MIN_INTERACTIONS,
+            },
+        );
+
+        env.events().publish((symbol_short!("init"),), admin);
+
+        Ok(())
+    }
+
+    /// Backward-compatible initializer wrapper.
+    pub fn init(env: Env, admin: Address) {
+        Self::initialize(env, admin).unwrap();
+    }
+
+    pub fn is_initialized(env: Env) -> bool {
+        env.storage().instance().has(&DataKey::Admin)
+    }
+
+    pub fn get_admin(env: Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)
+    }
+
+    pub fn get_rating_scale_config(env: Env) -> Result<RatingScaleConfig, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::RatingScaleConfig)
+            .ok_or(Error::NotInitialized)
+    }
+
+    pub fn get_decay_config(env: Env) -> Result<DecayConfig, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::DecayConfig)
+            .ok_or(Error::NotInitialized)
+    }
+
+    pub fn get_minimum_interactions(env: Env) -> Result<u32, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::MinimumInteractions)
+            .ok_or(Error::NotInitialized)
+    }
+
+    pub fn get_badge_config(env: Env) -> Result<BadgeConfig, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::BadgeConfig)
+            .ok_or(Error::NotInitialized)
     }
 
     // ── Write ──────────────────────────────────────────────────────────────────
