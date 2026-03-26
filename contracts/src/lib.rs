@@ -46,7 +46,7 @@ pub enum Error {
     DisputeAlreadyExists = 21,
     InvalidPaymentStatus = 22,
     /// Unit ID string exceeds maximum allowed length.
-    UnitIdTooLong = 18,
+    UnitIdTooLong = 25,
     /// SuperAdmin nomination has expired.
     NominationExpired = 23,
     /// A pending nomination already exists.
@@ -307,32 +307,22 @@ pub struct DisputeResolvedEvent {
     pub resolved_at: u64,
 }
 
-/// Storage keys
-const BLOOD_UNITS: Symbol = symbol_short!("UNITS");
-const NEXT_ID: Symbol = symbol_short!("NEXT_ID");
-const BLOOD_BANKS: Symbol = symbol_short!("BANKS");
-const HOSPITALS: Symbol = symbol_short!("HOSPS");
-const ADMIN: Symbol = symbol_short!("ADMIN");
-const REQUESTS: Symbol = symbol_short!("REQUESTS");
-const NEXT_REQUEST_ID: Symbol = symbol_short!("NEXT_REQ");
-const REQUEST_KEYS: Symbol = symbol_short!("REQ_KEYS");
-const BLOOD_REQUESTS: Symbol = symbol_short!("REQS");
-const PAYMENTS: Symbol = symbol_short!("PAY_RECS");
-const NEXT_PAYMENT_ID: Symbol = symbol_short!("NPAY_ID");
-const DISPUTES: Symbol = symbol_short!("DISP_REC");
-const NEXT_DISPUTE_ID: Symbol = symbol_short!("NDIS_ID");
-
-// Validation constants
-const MIN_QUANTITY_ML: u32 = 50; // Minimum 50ml
-const MAX_QUANTITY_ML: u32 = 500; // Maximum 500ml per unit
-const MIN_SHELF_LIFE_DAYS: u64 = 1; // At least 1 day shelf life
-const MAX_SHELF_LIFE_DAYS: u64 = 42; // Maximum 42 days for whole blood
-const MIN_REQUEST_ML: u32 = 50; // Minimum request amount
-const MAX_REQUEST_ML: u32 = 5000; // Maximum request amount
-const MAX_BATCH_SIZE: u32 = 100; // Maximum batch size for operations
-
-// Transfer expiry window (30 minutes)
-const TRANSFER_EXPIRY_SECONDS: u64 = 1800;
+/// Storage keys (single source of truth)
+pub(crate) const BLOOD_UNITS: Symbol = symbol_short!("UNITS");
+pub(crate) const NEXT_ID: Symbol = symbol_short!("NEXT_ID");
+pub(crate) const BLOOD_BANKS: Symbol = symbol_short!("BANKS");
+pub(crate) const HOSPITALS: Symbol = symbol_short!("HOSPS");
+pub(crate) const ADMIN: Symbol = symbol_short!("ADMIN");
+pub(crate) const REQUESTS: Symbol = symbol_short!("REQUESTS");
+pub(crate) const NEXT_REQUEST_ID: Symbol = symbol_short!("NEXT_REQ");
+pub(crate) const REQUEST_KEYS: Symbol = symbol_short!("REQ_KEYS");
+pub(crate) const BLOOD_REQUESTS: Symbol = symbol_short!("REQS");
+pub(crate) const PAYMENTS: Symbol = symbol_short!("PAY_RECS");
+pub(crate) const NEXT_PAYMENT_ID: Symbol = symbol_short!("NPAY_ID");
+pub(crate) const DISPUTES: Symbol = symbol_short!("DISP_REC");
+pub(crate) const NEXT_DISPUTE_ID: Symbol = symbol_short!("NDIS_ID");
+pub(crate) const CUSTODY_EVENTS: Symbol = symbol_short!("CUSTODY");
+pub(crate) const HISTORY: Symbol = symbol_short!("HISTORY");
 /// Storage key enumeration for composite keys
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -354,20 +344,6 @@ pub struct TrailMetadata {
     pub total_events: u32,
     pub total_pages: u32,
 }
-
-/// Storage keys
-pub(crate) const BLOOD_UNITS: Symbol = symbol_short!("UNITS");
-pub(crate) const NEXT_ID: Symbol = symbol_short!("NEXT_ID");
-pub(crate) const BLOOD_BANKS: Symbol = symbol_short!("BANKS");
-pub(crate) const HOSPITALS: Symbol = symbol_short!("HOSPS");
-pub(crate) const ADMIN: Symbol = symbol_short!("ADMIN");
-pub(crate) const REQUESTS: Symbol = symbol_short!("REQUESTS");
-pub(crate) const NEXT_REQUEST_ID: Symbol = symbol_short!("NEXT_REQ");
-pub(crate) const REQUEST_KEYS: Symbol = symbol_short!("REQ_KEYS");
-pub(crate) const CUSTODY_EVENTS: Symbol = symbol_short!("CUSTODY");
-
-// History storage key
-pub(crate) const HISTORY: Symbol = symbol_short!("HISTORY");
 
 // Re-export constants for internal use
 pub(crate) use constants::{
@@ -1002,9 +978,11 @@ impl HealthChainContract {
         // Emit event
         env.events().publish(
             (symbol_short!("blood"), symbol_short!("tr_cancel")),
-            (unit_id, current_time),
-            (symbol_short!("custody"), symbol_short!("cancel")),
-            custody_event,
+            (
+                (unit_id, current_time),
+                (symbol_short!("custody"), symbol_short!("cancel")),
+                custody_event,
+            ),
         );
 
         Ok(())
