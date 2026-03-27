@@ -9,8 +9,8 @@ import { SorobanModule } from '../soroban/soroban.module';
 import { BloodStatusService } from './blood-status.service';
 import { BloodUnitsController } from './blood-units.controller';
 import { BloodUnitsService } from './blood-units.service';
-import { BloodUnit, BloodUnitEntity } from './entities/blood-unit.entity';
 import { BloodStatusHistory } from './entities/blood-status-history.entity';
+import { BloodUnit, BloodUnitEntity } from './entities/blood-unit.entity';
 
 @Module({
   imports: [

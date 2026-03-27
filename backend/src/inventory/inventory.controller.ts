@@ -9,13 +9,16 @@ import {
   Query,
   HttpCode,
   HttpStatus,
+  ValidationPipe,
 } from '@nestjs/common';
 
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
 import { Permission } from '../auth/enums/permission.enum';
+import { PaginatedResponse, PaginationQueryDto } from '../common/pagination';
 
 import { CreateInventoryDto } from './dto/create-inventory.dto';
 import { UpdateInventoryDto } from './dto/update-inventory.dto';
+import { InventoryStockEntity } from './entities/inventory-stock.entity';
 import { InventoryService } from './inventory.service';
 
 @Controller('inventory')
@@ -24,8 +27,12 @@ export class InventoryController {
 
   @RequirePermissions(Permission.VIEW_INVENTORY)
   @Get()
-  findAll(@Query('hospitalId') hospitalId?: string) {
-    return this.inventoryService.findAll(hospitalId);
+  findAll(
+    @Query(new ValidationPipe({ transform: true, whitelist: true }))
+    paginationDto: PaginationQueryDto,
+    @Query('hospitalId') hospitalId?: string,
+  ): Promise<PaginatedResponse<InventoryStockEntity>> {
+    return this.inventoryService.findAll(hospitalId, paginationDto);
   }
 
   @RequirePermissions(Permission.VIEW_INVENTORY)

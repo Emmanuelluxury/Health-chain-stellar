@@ -4,6 +4,7 @@ import {
   Column,
   CreateDateColumn,
   UpdateDateColumn,
+  VersionColumn,
 } from 'typeorm';
 
 import { OrderStatus } from '../enums/order-status.enum';
@@ -44,9 +45,28 @@ export class OrderEntity {
   @Column({ name: 'dispute_reason', nullable: true, type: 'text' })
   disputeReason: string | null;
 
+  @VersionColumn()
+  version: number;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
+
+  @Column({ type: 'jsonb', nullable: true })
+  feeBreakdown: {
+    deliveryFee: number;
+    platformFee: number;
+    performanceFee: number;
+    fixedFee: number;
+    totalFee: number;
+    baseAmount: number;
+    appliedPolicyId: string;
+    auditHash: string;
+  } | null;
+
+  @Column({ name: 'applied_policy_id', type: 'uuid', nullable: true })
+  appliedPolicyId: string | null;
 }
+

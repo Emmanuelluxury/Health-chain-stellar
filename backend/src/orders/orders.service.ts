@@ -5,24 +5,40 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
 
-import { OrderStateMachine } from './state-machine/order-state-machine';
-import { OrderEventStoreService } from './services/order-event-store.service';
-import { OrderEntity } from './entities/order.entity';
-import { OrderEventEntity } from './entities/order-event.entity';
-import { OrderEventType } from './enums/order-event-type.enum';
-import { OrderStatus } from './enums/order-status.enum';
-import { Order, BloodType } from './types/order.types';
+import { OptimisticLockVersionMismatchError, Repository } from 'typeorm';
+
+import { PaginatedResponse, PaginationUtil } from '../common/pagination';
+import {
+  OrderConfirmedEvent,
+  OrderCancelledEvent,
+  OrderStatusUpdatedEvent,
+  OrderRiderAssignedEvent,
+  OrderDispatchedEvent,
+  OrderInTransitEvent,
+  OrderDeliveredEvent,
+  OrderDisputedEvent,
+  OrderResolvedEvent,
+} from '../events';
+import { InventoryService } from '../inventory/inventory.service';
+
 import { OrderQueryParamsDto } from './dto/order-query-params.dto';
 import { OrdersResponseDto } from './dto/orders-response.dto';
-import { OrderRiderAssignedEvent } from '../events';
-import { InventoryService } from '../inventory/inventory.service';
 import { UpdateRequestStatusDto } from './dto/update-request-status.dto';
-import { RequestStatusService } from './services/request-status.service';
+import { OrderEventEntity } from './entities/order-event.entity';
+import { OrderEntity } from './entities/order.entity';
+import { OrderEventType } from './enums/order-event-type.enum';
+import { OrderStatus } from './enums/order-status.enum';
 import { RequestStatusAction } from './enums/request-status-action.enum';
-import { EventEmitter2 } from '@nestjs/event-emitter';
+import { OrderEventStoreService } from './services/order-event-store.service';
+import { FeePolicyService } from '../fee-policy/fee-policy.service';
+import { FeePreviewDto } from '../fee-policy/dto/fee-policy.dto';
+import { FeeBreakdownDto } from '../fee-policy/dto/fee-policy.dto';
+import { RequestStatusService } from './services/request-status.service';
+import { OrderStateMachine } from './state-machine/order-state-machine';
+import { Order, BloodType } from './types/order.types';
 
 @Injectable()
 export class OrdersService {
@@ -36,8 +52,10 @@ export class OrdersService {
     private readonly eventStore: OrderEventStoreService,
     private readonly eventEmitter: EventEmitter2,
     private readonly inventoryService: InventoryService,
+    private readonly sorobanService: SorobanService,
     private readonly requestStatusService: RequestStatusService,
-  ) {}
+    private readonly feePolicyService: FeePolicyService,
+  ) { }
 
   // ─── Queries ─────────────────────────────────────────────────────────────
 
@@ -50,7 +68,9 @@ export class OrdersService {
     return { message: 'Orders retrieved successfully', data: orders };
   }
 
-  async findAllWithFilters(params: OrderQueryParamsDto): Promise<OrdersResponseDto> {
+  async findAllWithFilters(
+    params: OrderQueryParamsDto,
+  ): Promise<PaginatedResponse<Order>> {
     const {
       hospitalId,
       startDate,
@@ -66,21 +86,21 @@ export class OrdersService {
 
     // Start with all orders for the hospital
     let filteredOrders = this.orders.filter(
-      (order) => order.hospital.id === hospitalId
+      (order) => order.hospital.id === hospitalId,
     );
 
     // Apply date range filter
     if (startDate) {
       const start = new Date(startDate);
       filteredOrders = filteredOrders.filter(
-        (order) => new Date(order.placedAt) >= start
+        (order) => new Date(order.placedAt) >= start,
       );
     }
 
     if (endDate) {
       const end = new Date(endDate);
       filteredOrders = filteredOrders.filter(
-        (order) => new Date(order.placedAt) <= end
+        (order) => new Date(order.placedAt) <= end,
       );
     }
 
@@ -88,7 +108,7 @@ export class OrdersService {
     if (bloodTypes) {
       const bloodTypeArray = bloodTypes.split(',') as BloodType[];
       filteredOrders = filteredOrders.filter((order) =>
-        bloodTypeArray.includes(order.bloodType)
+        bloodTypeArray.includes(order.bloodType),
       );
     }
 
@@ -96,7 +116,7 @@ export class OrdersService {
     if (statuses) {
       const statusArray = statuses.split(',') as OrderStatus[];
       filteredOrders = filteredOrders.filter((order) =>
-        statusArray.includes(order.status)
+        statusArray.includes(order.status),
       );
     }
 
@@ -104,7 +124,7 @@ export class OrdersService {
     if (bloodBank) {
       const searchTerm = bloodBank.toLowerCase();
       filteredOrders = filteredOrders.filter((order) =>
-        order.bloodBank.name.toLowerCase().includes(searchTerm)
+        order.bloodBank.name.toLowerCase().includes(searchTerm),
       );
     }
 
@@ -129,22 +149,15 @@ export class OrdersService {
 
     // Calculate pagination
     const totalCount = filteredOrders.length;
-    const totalPages = Math.ceil(totalCount / pageSize);
-    const startIndex = (page - 1) * pageSize;
-    const endIndex = startIndex + pageSize;
+    const skip = PaginationUtil.calculateSkip(page, pageSize);
+    const paginatedOrders = filteredOrders.slice(skip, skip + pageSize);
 
-    // Get paginated results
-    const paginatedOrders = filteredOrders.slice(startIndex, endIndex);
-
-    return {
-      data: paginatedOrders,
-      pagination: {
-        currentPage: page,
-        pageSize,
-        totalCount,
-        totalPages,
-      },
-    };
+    return PaginationUtil.createResponse(
+      paginatedOrders,
+      page,
+      pageSize,
+      totalCount,
+    );
   }
 
   private getSortValue(order: Order, sortBy: string): any {
@@ -196,16 +209,30 @@ export class OrdersService {
 
   // ─── Commands ─────────────────────────────────────────────────────────────
 
-  async create(createOrderDto: any, actorId?: string) {
+  async create(createOrderDto: CreateOrderDto, actorId?: string) {
     if (!createOrderDto.bloodBankId) {
-      throw new BadRequestException('bloodBankId is required to place an order.');
+      throw new BadRequestException(
+        'bloodBankId is required to place an order.',
+      );
     }
 
+    const saved = await this.createOrderEntity(createOrderDto, actorId);
+
+    // Compute and save fees for confirmed orders (on create, status PENDING, compute on transition)
+    if (saved.status === OrderStatus.CONFIRMED || saved.status === OrderStatus.DISPATCHED) {
+      await this.computeFees(saved);
+    }
+
+    this.logger.log(`Order created: ${saved.id}`);
+    return { message: 'Order created successfully', data: saved };
+  }
+
+  private async createOrderEntity(createOrderDto: CreateOrderDto, actorId?: string): Promise<OrderEntity> {
     try {
       await this.inventoryService.reserveStockOrThrow(
-        createOrderDto.bloodBankId,
+        createOrderDto.bloodBankId!,
         createOrderDto.bloodType,
-        Number(createOrderDto.quantity),
+        createOrderDto.quantity,
       );
     } catch (error) {
       if (error instanceof ConflictException) {
@@ -228,7 +255,6 @@ export class OrdersService {
 
     const saved = await this.orderRepo.save(order);
 
-    // Persist the creation event — marks order as PENDING in the event store.
     await this.eventStore.persistEvent({
       orderId: saved.id,
       eventType: OrderEventType.ORDER_CREATED,
@@ -242,15 +268,47 @@ export class OrdersService {
       actorId,
     });
 
-    this.logger.log(`Order created: ${saved.id}`);
-    return { message: 'Order created successfully', data: saved };
+    return saved;
+  }
+
+  async computeFees(order: OrderEntity): Promise<void> {
+    // Extract inputs from order (TODO: integrate maps for distance, config for geography)
+    const previewDto: FeePreviewDto = {
+      geographyCode: 'LAG', // Default, make configurable
+      urgencyTier: 'STANDARD' as any, // From order status/service level
+      distanceKm: 10, // From maps or DTO
+      serviceLevel: 'BASIC' as any,
+      quantity: order.quantity,
+    };
+
+    const breakdown = await this.feePolicyService.previewFees(previewDto);
+    order.feeBreakdown = breakdown as any;
+    order.appliedPolicyId = breakdown.appliedPolicyId;
+    await this.orderRepo.save(order);
   }
 
   async update(id: string, updateOrderDto: any) {
     const order = await this.findOrderOrFail(id);
+    if (
+      updateOrderDto.version !== undefined &&
+      updateOrderDto.version !== order.version
+    ) {
+      throw new ConflictException(
+        `Order '${id}' was modified by another request. Fetch the latest version and retry.`,
+      );
+    }
     Object.assign(order, updateOrderDto);
-    const updated = await this.orderRepo.save(order);
-    return { message: 'Order updated successfully', data: updated };
+    try {
+      const updated = await this.orderRepo.save(order);
+      return { message: 'Order updated successfully', data: updated };
+    } catch (err) {
+      if (err instanceof OptimisticLockVersionMismatchError) {
+        throw new ConflictException(
+          `Order '${id}' was modified by another request. Fetch the latest version and retry.`,
+        );
+      }
+      throw err;
+    }
   }
 
   /**
@@ -271,10 +329,29 @@ export class OrdersService {
         : statusUpdate;
 
     const order = await this.findOrderOrFail(id);
-    await this.requestStatusService.applyStatusUpdate(order, dto, actorId, actorRole);
-    const updated = await this.orderRepo.save(order);
+    await this.requestStatusService.applyStatusUpdate(
+      order,
+      dto,
+      actorId,
+      actorRole,
+    );
 
-    return { message: 'Order status updated successfully', data: updated };
+    // Compute fees for confirmed/dispatched
+    if (order.status === OrderStatus.CONFIRMED || order.status === OrderStatus.DISPATCHED || order.status === OrderStatus.IN_TRANSIT) {
+      await this.computeFees(order);
+    }
+
+    try {
+      const updated = await this.orderRepo.save(order);
+      return { message: 'Order status updated successfully', data: updated };
+    } catch (err) {
+      if (err instanceof OptimisticLockVersionMismatchError) {
+        throw new ConflictException(
+          `Order '${id}' was modified by another request. Fetch the latest version and retry.`,
+        );
+      }
+      throw err;
+    }
   }
 
   /**
@@ -296,14 +373,26 @@ export class OrdersService {
   async assignRider(orderId: string, riderId: string, actorId?: string) {
     const order = await this.findOrderOrFail(orderId);
     order.riderId = riderId;
-    await this.orderRepo.save(order);
+    try {
+      await this.orderRepo.save(order);
+    } catch (err) {
+      if (err instanceof OptimisticLockVersionMismatchError) {
+        throw new ConflictException(
+          `Order '${orderId}' was modified by another request. Fetch the latest version and retry.`,
+        );
+      }
+      throw err;
+    }
 
     this.eventEmitter.emit(
       'order.rider.assigned',
       new OrderRiderAssignedEvent(orderId, riderId),
     );
 
-    return { message: 'Rider assigned successfully', data: { orderId, riderId } };
+    return {
+      message: 'Rider assigned successfully',
+      data: { orderId, riderId },
+    };
   }
 
   // ─── Helpers ──────────────────────────────────────────────────────────────

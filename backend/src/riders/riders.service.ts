@@ -1,10 +1,22 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ConflictException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+
 import { Repository } from 'typeorm';
-import { RiderEntity } from './entities/rider.entity';
+
+import {
+  PaginatedResponse,
+  PaginationQueryDto,
+  PaginationUtil,
+} from '../common/pagination';
+
 import { CreateRiderDto } from './dto/create-rider.dto';
-import { UpdateRiderDto } from './dto/update-rider.dto';
 import { RegisterRiderDto } from './dto/register-rider.dto';
+import { UpdateRiderDto } from './dto/update-rider.dto';
+import { RiderEntity } from './entities/rider.entity';
 import { RiderStatus } from './enums/rider-status.enum';
 
 @Injectable()
@@ -14,16 +26,21 @@ export class RidersService {
     private readonly riderRepository: Repository<RiderEntity>,
   ) {}
 
-  async findAll(status?: RiderStatus) {
+  async findAll(
+    status?: RiderStatus,
+    paginationDto?: PaginationQueryDto,
+  ): Promise<PaginatedResponse<RiderEntity>> {
+    const { page = 1, pageSize = 25 } = paginationDto || {};
     const where = status ? { status } : {};
-    const riders = await this.riderRepository.find({
+
+    const [riders, totalCount] = await this.riderRepository.findAndCount({
       where,
       relations: ['user'],
+      skip: PaginationUtil.calculateSkip(page, pageSize),
+      take: pageSize,
     });
-    return {
-      message: 'Riders retrieved successfully',
-      data: riders,
-    };
+
+    return PaginationUtil.createResponse(riders, page, pageSize, totalCount);
   }
 
   async findOne(id: string) {
@@ -59,7 +76,9 @@ export class RidersService {
       where: { userId: createRiderDto.userId },
     });
     if (existing) {
-      throw new ConflictException(`Rider for user '${createRiderDto.userId}' already exists`);
+      throw new ConflictException(
+        `Rider for user '${createRiderDto.userId}' already exists`,
+      );
     }
 
     const rider = this.riderRepository.create(createRiderDto);
@@ -86,7 +105,8 @@ export class RidersService {
     });
     const saved = await this.riderRepository.save(rider);
     return {
-      message: 'Rider registration submitted successfully. Awaiting verification.',
+      message:
+        'Rider registration submitted successfully. Awaiting verification.',
       data: saved,
     };
   }
