@@ -46,7 +46,7 @@ import { SorobanService } from './services/soroban.service';
         }),
         inject: [ConfigService],
       },
-    ),
+    ]),
   ],
   providers: [
     SorobanService,
