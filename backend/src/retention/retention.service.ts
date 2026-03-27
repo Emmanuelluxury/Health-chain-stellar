@@ -8,6 +8,7 @@ import { Repository, LessThan } from 'typeorm';
 
 import { REDIS_CLIENT } from '../redis/redis.constants';
 import { UserActivityEntity } from '../user-activity/entities/user-activity.entity';
+import { SensitiveDataService } from './sensitive-data.service';
 
 @Injectable()
 export class RetentionService {
@@ -18,6 +19,7 @@ export class RetentionService {
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     @InjectRepository(UserActivityEntity)
     private readonly userActivityRepository: Repository<UserActivityEntity>,
+    private readonly sensitiveDataService: SensitiveDataService,
   ) {}
 
   @Cron('0 2 * * *', {
@@ -26,15 +28,16 @@ export class RetentionService {
   })
   async cleanupStaleData(): Promise<void> {
     this.logger.log(
-      'Starting retention job for stale sessions and activity logs',
+      'Starting retention job for stale sessions, activity logs, and sensitive data',
     );
 
     try {
       const sessionsDeleted = await this.cleanupStaleSessions();
       const logsDeleted = await this.cleanupOldActivityLogs();
+      const { redactionsProcessed, redactionsFailed } = await this.processSensitiveDataRedactions();
 
       this.logger.log(
-        `Retention job completed: ${sessionsDeleted} sessions deleted, ${logsDeleted} activity logs deleted`,
+        `Retention job completed: ${sessionsDeleted} sessions deleted, ${logsDeleted} activity logs deleted, ${redactionsProcessed} redactions processed, ${redactionsFailed} redactions failed`,
       );
     } catch (error) {
       this.logger.error('Retention job failed', error);
@@ -109,17 +112,51 @@ export class RetentionService {
   }
 
   /**
-   * Manually trigger retention job (useful for testing or admin operations)
+   * Process sensitive data redactions based on retention policies
    */
+  private async processSensitiveDataRedactions(): Promise<{ redactionsProcessed: number; redactionsFailed: number }> {
+    this.logger.debug('Processing sensitive data redactions');
+
+    try {
+      // Ensure default retention policies exist
+      await this.sensitiveDataService.createDefaultRetentionPolicies();
+
+      // Find data needing redaction
+      const redactions = await this.sensitiveDataService.findDataNeedingRedaction();
+
+      if (redactions.length > 0) {
+        this.logger.log(`Found ${redactions.length} fields requiring redaction`);
+
+        // Save redaction records
+        await this.sensitiveDataService.saveRedactions(redactions);
+
+        // Execute redactions
+        const result = await this.sensitiveDataService.executeRedactions();
+        return { redactionsProcessed: result.processed, redactionsFailed: result.failed };
+      }
+
+      return { redactionsProcessed: 0, redactionsFailed: 0 };
+    } catch (error) {
+      this.logger.error('Failed to process sensitive data redactions', error);
+      return { redactionsProcessed: 0, redactionsFailed: 1 };
+    }
+  }
+
+  /**
+    * Manually trigger retention job (useful for testing or admin operations)
+    */
   async triggerRetention(): Promise<{
     sessionsDeleted: number;
     logsDeleted: number;
+    redactionsProcessed: number;
+    redactionsFailed: number;
   }> {
     this.logger.log('Manual retention job triggered');
 
     const sessionsDeleted = await this.cleanupStaleSessions();
     const logsDeleted = await this.cleanupOldActivityLogs();
+    const { redactionsProcessed, redactionsFailed } = await this.processSensitiveDataRedactions();
 
-    return { sessionsDeleted, logsDeleted };
+    return { sessionsDeleted, logsDeleted, redactionsProcessed, redactionsFailed };
   }
 }

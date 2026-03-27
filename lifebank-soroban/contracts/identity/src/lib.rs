@@ -23,6 +23,8 @@ pub enum Error {
     BadgeAlreadyAwarded = 208,
     BadgeNotFound = 209,
     InvalidDeliveryProof = 210,
+    AlreadyVerified = 211,
+    AlreadyUnverified = 212,
 }
 
 // ---------------------------------------------------------------------------
@@ -138,6 +140,8 @@ pub enum DataKey {
     OrgCounter,
     Admin,
     OrgTypeList(OrgType),
+    OrgVerifier(Address),
+    OrgUnverifyReason(Address),
     // Rating
     RatedFlag(u64, Address),
     RatingRecord(u64, Address),
@@ -168,8 +172,7 @@ impl IdentityContract {
         env.storage().instance().set(&DataKey::OrgCounter, &0u32);
         Self::grant_role(env.clone(), admin.clone(), Role::Admin);
 
-        env.events()
-            .publish((symbol_short!("init"),), admin);
+        env.events().publish((symbol_short!("init"),), admin);
 
         Ok(())
     }
@@ -190,7 +193,11 @@ impl IdentityContract {
             return Err(Error::Unauthorized);
         }
 
-        Ok(env.storage().instance().get(&DataKey::OrgCounter).unwrap_or(0))
+        Ok(env
+            .storage()
+            .instance()
+            .get(&DataKey::OrgCounter)
+            .unwrap_or(0))
     }
 
     /// Register a new organization
@@ -288,6 +295,15 @@ impl IdentityContract {
     pub fn has_role(env: Env, account: Address, role: Role) -> bool {
         let stored: Option<Role> = env.storage().persistent().get(&DataKey::Role(account));
         stored.map(|r| r == role).unwrap_or(false)
+    }
+
+    /// Require that an address has a given role, return Unauthorized error if not
+    fn require_role(env: &Env, account: &Address, role: Role) -> Result<(), Error> {
+        if Self::has_role(env.clone(), account.clone(), role) {
+            Ok(())
+        } else {
+            Err(Error::Unauthorized)
+        }
     }
 
     /// Return all organizations of the given type (up to max_results)
@@ -390,6 +406,76 @@ impl IdentityContract {
         results
     }
 
+    /// Verify an organization (admin only)
+    pub fn verify_organization(env: Env, admin: Address, org_id: Address) -> Result<(), Error> {
+        admin.require_auth();
+        Self::require_role(&env, &admin, Role::Admin)?;
+
+        let org_key = DataKey::Org(org_id.clone());
+        let mut organization: Organization = env
+            .storage()
+            .persistent()
+            .get(&org_key)
+            .ok_or(Error::OrganizationNotFound)?;
+
+        if organization.verified {
+            return Err(Error::AlreadyVerified);
+        }
+
+        // Update organization
+        organization.verified = true;
+        organization.verified_timestamp = Some(env.ledger().timestamp());
+        env.storage().persistent().set(&org_key, &organization);
+
+        // Store verifier
+        let verifier_key = DataKey::OrgVerifier(org_id.clone());
+        env.storage().persistent().set(&verifier_key, &admin);
+
+        // Emit event
+        env.events().publish(
+            (symbol_short!("org_verified"),),
+            (org_id, admin, env.ledger().timestamp()),
+        );
+
+        Ok(())
+    }
+
+    /// Unverify an organization (admin only)
+    pub fn unverify_organization(
+        env: Env,
+        admin: Address,
+        org_id: Address,
+        reason: String,
+    ) -> Result<(), Error> {
+        admin.require_auth();
+        Self::require_role(&env, &admin, Role::Admin)?;
+
+        let org_key = DataKey::Org(org_id.clone());
+        let mut organization: Organization = env
+            .storage()
+            .persistent()
+            .get(&org_key)
+            .ok_or(Error::OrganizationNotFound)?;
+
+        if !organization.verified {
+            return Err(Error::AlreadyUnverified);
+        }
+
+        organization.verified = false;
+        organization.verified_timestamp = None;
+        env.storage().persistent().set(&org_key, &organization);
+
+        // Store reason
+        let reason_key = DataKey::OrgUnverifyReason(org_id.clone());
+        env.storage().persistent().set(&reason_key, &reason);
+
+        // Emit event
+        env.events()
+            .publish((symbol_short!("org_unverified"),), (org_id, reason));
+
+        Ok(())
+    }
+
     // -----------------------------------------------------------------------
     // Rating
     // -----------------------------------------------------------------------
@@ -446,20 +532,14 @@ impl IdentityContract {
             .persistent()
             .set(&DataKey::RatingRecord(request_id, rater.clone()), &record);
 
-        env.events().publish(
-            (symbol_short!("rated"),),
-            (org_id, rater, rating),
-        );
+        env.events()
+            .publish((symbol_short!("rated"),), (org_id, rater, rating));
 
         Ok(())
     }
 
     /// Get a rating record for a given request and rater
-    pub fn get_rating_record(
-        env: Env,
-        request_id: u64,
-        rater: Address,
-    ) -> Option<RatingRecord> {
+    pub fn get_rating_record(env: Env, request_id: u64, rater: Address) -> Option<RatingRecord> {
         env.storage()
             .persistent()
             .get(&DataKey::RatingRecord(request_id, rater))
@@ -500,7 +580,11 @@ impl IdentityContract {
         }
 
         // Org must exist
-        if !env.storage().persistent().has(&DataKey::Org(org_id.clone())) {
+        if !env
+            .storage()
+            .persistent()
+            .has(&DataKey::Org(org_id.clone()))
+        {
             return Err(Error::OrganizationNotFound);
         }
 
@@ -528,10 +612,8 @@ impl IdentityContract {
         badges.push_back(record);
         env.storage().persistent().set(&badges_key, &badges);
 
-        env.events().publish(
-            (symbol_short!("badge"),),
-            (org_id, admin),
-        );
+        env.events()
+            .publish((symbol_short!("badge"),), (org_id, admin));
 
         Ok(())
     }
@@ -609,7 +691,11 @@ impl IdentityContract {
         }
 
         // Org must exist
-        if !env.storage().persistent().has(&DataKey::Org(org_id.clone())) {
+        if !env
+            .storage()
+            .persistent()
+            .has(&DataKey::Org(org_id.clone()))
+        {
             return Err(Error::OrganizationNotFound);
         }
 

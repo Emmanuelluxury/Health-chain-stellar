@@ -263,6 +263,195 @@ fn test_get_verified_organizations() {
     assert_eq!(verified.len(), 0);
 }
 
+#[test]
+fn test_verify_organization() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(IdentityContract, ());
+    let client = IdentityContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let owner = Address::generate(&env);
+    let name = String::from_str(&env, "City Blood Bank");
+    let license = String::from_str(&env, "L12345");
+    let location_hash = BytesN::from_array(&env, &[0u8; 32]);
+    let doc_hashes = vec![&env, BytesN::from_array(&env, &[1u8; 32])];
+
+    let org_id = client.register_organization(
+        &owner,
+        &OrgType::BloodBank,
+        &name,
+        &license,
+        &location_hash,
+        &doc_hashes,
+    );
+
+    // Verify the organization
+    client.verify_organization(&admin, &org_id);
+
+    let org = client.get_organization(&org_id).unwrap();
+    assert_eq!(org.verified, true);
+    assert!(org.verified_timestamp.is_some());
+
+    // Check verifier is stored
+    // Note: We don't have a getter for verifier in the contract, but we can check events
+    assert_eq!(env.events().all().len(), 3); // init, register, verify
+}
+
+#[test]
+fn test_verify_organization_not_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(IdentityContract, ());
+    let client = IdentityContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let owner = Address::generate(&env);
+    let name = String::from_str(&env, "City Blood Bank");
+    let license = String::from_str(&env, "L12345");
+    let location_hash = BytesN::from_array(&env, &[0u8; 32]);
+    let doc_hashes = vec![&env, BytesN::from_array(&env, &[1u8; 32])];
+
+    let org_id = client.register_organization(
+        &owner,
+        &OrgType::BloodBank,
+        &name,
+        &license,
+        &location_hash,
+        &doc_hashes,
+    );
+
+    let non_admin = Address::generate(&env);
+    let result = client.try_verify_organization(&non_admin, &org_id);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
+
+#[test]
+fn test_verify_organization_already_verified() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(IdentityContract, ());
+    let client = IdentityContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let owner = Address::generate(&env);
+    let name = String::from_str(&env, "City Blood Bank");
+    let license = String::from_str(&env, "L12345");
+    let location_hash = BytesN::from_array(&env, &[0u8; 32]);
+    let doc_hashes = vec![&env, BytesN::from_array(&env, &[1u8; 32])];
+
+    let org_id = client.register_organization(
+        &owner,
+        &OrgType::BloodBank,
+        &name,
+        &license,
+        &location_hash,
+        &doc_hashes,
+    );
+
+    client.verify_organization(&admin, &org_id);
+
+    // Try to verify again
+    let result = client.try_verify_organization(&admin, &org_id);
+    assert_eq!(result, Err(Ok(Error::AlreadyVerified)));
+}
+
+#[test]
+fn test_verify_organization_not_found() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(IdentityContract, ());
+    let client = IdentityContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let fake_org = Address::generate(&env);
+    let result = client.try_verify_organization(&admin, &fake_org);
+    assert_eq!(result, Err(Ok(Error::OrganizationNotFound)));
+}
+
+#[test]
+fn test_unverify_organization() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(IdentityContract, ());
+    let client = IdentityContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let owner = Address::generate(&env);
+    let name = String::from_str(&env, "City Blood Bank");
+    let license = String::from_str(&env, "L12345");
+    let location_hash = BytesN::from_array(&env, &[0u8; 32]);
+    let doc_hashes = vec![&env, BytesN::from_array(&env, &[1u8; 32])];
+
+    let org_id = client.register_organization(
+        &owner,
+        &OrgType::BloodBank,
+        &name,
+        &license,
+        &location_hash,
+        &doc_hashes,
+    );
+
+    client.verify_organization(&admin, &org_id);
+
+    // Unverify the organization
+    let reason = String::from_str(&env, "Compliance issue");
+    client.unverify_organization(&admin, &org_id, &reason);
+
+    let org = client.get_organization(&org_id).unwrap();
+    assert_eq!(org.verified, false);
+    assert!(org.verified_timestamp.is_none());
+
+    assert_eq!(env.events().all().len(), 4); // init, register, verify, unverify
+}
+
+#[test]
+fn test_unverify_organization_already_unverified() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(IdentityContract, ());
+    let client = IdentityContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let owner = Address::generate(&env);
+    let name = String::from_str(&env, "City Blood Bank");
+    let license = String::from_str(&env, "L12345");
+    let location_hash = BytesN::from_array(&env, &[0u8; 32]);
+    let doc_hashes = vec![&env, BytesN::from_array(&env, &[1u8; 32])];
+
+    let org_id = client.register_organization(
+        &owner,
+        &OrgType::BloodBank,
+        &name,
+        &license,
+        &location_hash,
+        &doc_hashes,
+    );
+
+    // Try to unverify without verifying first
+    let reason = String::from_str(&env, "Test reason");
+    let result = client.try_unverify_organization(&admin, &org_id, &reason);
+    assert_eq!(result, Err(Ok(Error::AlreadyUnverified)));
+}
+
 // ---------------------------------------------------------------------------
 // Rating tests
 // ---------------------------------------------------------------------------
@@ -920,11 +1109,21 @@ fn test_storage_benchmark_comparison() {
     client.grant_role_with_expiry(&addr5, &Role::BloodBank, &None);
 
     let mut storage_entry_count = 0;
-    if client.get_roles(&addr1).len() > 0 { storage_entry_count += 1; }
-    if client.get_roles(&addr2).len() > 0 { storage_entry_count += 1; }
-    if client.get_roles(&addr3).len() > 0 { storage_entry_count += 1; }
-    if client.get_roles(&addr4).len() > 0 { storage_entry_count += 1; }
-    if client.get_roles(&addr5).len() > 0 { storage_entry_count += 1; }
+    if client.get_roles(&addr1).len() > 0 {
+        storage_entry_count += 1;
+    }
+    if client.get_roles(&addr2).len() > 0 {
+        storage_entry_count += 1;
+    }
+    if client.get_roles(&addr3).len() > 0 {
+        storage_entry_count += 1;
+    }
+    if client.get_roles(&addr4).len() > 0 {
+        storage_entry_count += 1;
+    }
+    if client.get_roles(&addr5).len() > 0 {
+        storage_entry_count += 1;
+    }
 
     assert_eq!(storage_entry_count, 5);
 
@@ -989,7 +1188,11 @@ fn test_lazy_deletion_in_has_role() {
     assert!(!client.has_role(&address, &Role::Donor));
 
     let roles_after = client.get_roles(&address);
-    assert_eq!(roles_after.len(), 0, "Expired role should be deleted from storage");
+    assert_eq!(
+        roles_after.len(),
+        0,
+        "Expired role should be deleted from storage"
+    );
 }
 
 #[test]

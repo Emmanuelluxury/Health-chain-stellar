@@ -24,6 +24,8 @@ import { CorrelationIdService } from './common/middleware/correlation-id.service
 import { AppConfigModule } from './config/config.module';
 import { DatabaseSyncGuard } from './config/database-sync.guard';
 import { DispatchModule } from './dispatch/dispatch.module';
+import { DonorImpactModule } from './donor-impact/donor-impact.module';
+import { LocationHistoryModule } from './location-history/location-history.module';
 import { HospitalsModule } from './hospitals/hospitals.module';
 import { InventoryModule } from './inventory/inventory.module';
 import { LocationHistoryModule } from './location-history/location-history.module';
@@ -35,11 +37,16 @@ import { OrganizationsModule } from './organizations/organizations.module';
 import { REDIS_CLIENT } from './redis/redis.constants';
 import { RedisModule } from './redis/redis.module';
 import { RetentionModule } from './retention/retention.module';
+import { DeliveryProofModule } from './delivery-proof/delivery-proof.module';
 import { RidersModule } from './riders/riders.module';
 import { throttleGetTracker } from './throttler/throttle-tracker.util';
 import { ActivityLoggingInterceptor } from './user-activity/interceptors/activity-logging.interceptor';
 import { UserActivityModule } from './user-activity/user-activity.module';
 import { UsersModule } from './users/users.module';
+import { CorrelationIdMiddleware } from './common/middleware/correlation-id.middleware';
+import { CorrelationIdService } from './common/middleware/correlation-id.service';
+import { DatabaseSyncGuard } from './config/database-sync.guard';
+import { TrackingModule } from './tracking/tracking.module';
 
 import type Redis from 'ioredis';
 
@@ -101,6 +108,7 @@ import type Redis from 'ioredis';
     MapsModule,
     BloodUnitsModule,
     LocationHistoryModule,
+    DonorImpactModule,
     BullModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -118,6 +126,8 @@ import type Redis from 'ioredis';
     UserActivityModule,
     EventsModule,
     RetentionModule,
+    TrackingModule,
+  ],
     FeePolicyModule,
     AnomalyModule,
     BatchImportModule,

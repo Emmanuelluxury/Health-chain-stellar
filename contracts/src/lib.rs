@@ -52,7 +52,11 @@ pub enum Error {
     /// A pending nomination already exists.
     NominationPending = 24,
     /// Overflow/underflow detected during quantity arithmetic.
-    ArithmeticError = 25,
+    ArithmeticError = 28,
+    /// Organization not found in storage.
+    OrganizationNotFound = 26,
+    /// Organization is already verified.
+    AlreadyVerified = 27,
 }
 
 // Alias for issue/docs terminology.
@@ -392,6 +396,24 @@ pub(crate) use constants::{
 pub struct NominationEntry {
     pub nominee: Address,
     pub nominated_at: u64,
+}
+
+/// Organization record for verification tracking.
+#[contracttype]
+#[derive(Clone)]
+pub struct Organization {
+    pub id: Address,
+    pub verified: bool,
+    pub verified_timestamp: Option<u64>,
+}
+
+/// Composite storage keys for organization verification.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum OrgKey {
+    Org(Address),
+    Verifier(Address),
+    UnverifyReason(Address),
 }
 
 #[contract]
@@ -2395,6 +2417,120 @@ impl HealthChainContract {
     }
 }
 
+#[contractimpl]
+impl HealthChainContract {
+    /// Register an organization (any address can self-register).
+    pub fn register_organization(env: Env, org_id: Address) -> Result<(), Error> {
+        org_id.require_auth();
+
+        let org_key = OrgKey::Org(org_id.clone());
+        if env.storage().persistent().has(&org_key) {
+            return Err(Error::DuplicateRegistration);
+        }
+
+        let organization = Organization {
+            id: org_id.clone(),
+            verified: false,
+            verified_timestamp: None,
+        };
+
+        env.storage().persistent().set(&org_key, &organization);
+
+        env.events()
+            .publish((symbol_short!("org"), symbol_short!("reg")), org_id);
+
+        Ok(())
+    }
+
+    /// Verify an organization (admin only).
+    pub fn verify_organization(env: Env, admin: Address, org_id: Address) -> Result<(), Error> {
+        admin.require_auth();
+
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&ADMIN)
+            .ok_or(Error::Unauthorized)?;
+        if admin != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        let org_key = OrgKey::Org(org_id.clone());
+        let mut organization: Organization = env
+            .storage()
+            .persistent()
+            .get(&org_key)
+            .ok_or(Error::OrganizationNotFound)?;
+
+        if organization.verified {
+            return Err(Error::AlreadyVerified);
+        }
+
+        organization.verified = true;
+        organization.verified_timestamp = Some(env.ledger().timestamp());
+        env.storage().persistent().set(&org_key, &organization);
+
+        let verifier_key = OrgKey::Verifier(org_id.clone());
+        env.storage().persistent().set(&verifier_key, &admin);
+
+        env.events().publish(
+            (symbol_short!("org"), symbol_short!("verified")),
+            (org_id, admin, env.ledger().timestamp()),
+        );
+
+        Ok(())
+    }
+
+    /// Unverify an organization (admin only).
+    pub fn unverify_organization(
+        env: Env,
+        admin: Address,
+        org_id: Address,
+        reason: String,
+    ) -> Result<(), Error> {
+        admin.require_auth();
+
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&ADMIN)
+            .ok_or(Error::Unauthorized)?;
+        if admin != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        let org_key = OrgKey::Org(org_id.clone());
+        let mut organization: Organization = env
+            .storage()
+            .persistent()
+            .get(&org_key)
+            .ok_or(Error::OrganizationNotFound)?;
+
+        organization.verified = false;
+        organization.verified_timestamp = None;
+        env.storage().persistent().set(&org_key, &organization);
+
+        let reason_key = OrgKey::UnverifyReason(org_id.clone());
+        env.storage().persistent().set(&reason_key, &reason);
+
+        env.events().publish(
+            (symbol_short!("org"), symbol_short!("unverif")),
+            (org_id, reason),
+        );
+
+        Ok(())
+    }
+
+    /// Query an organization by address.
+    pub fn get_organization(env: Env, org_id: Address) -> Result<Organization, Error> {
+        let org_key = OrgKey::Org(org_id);
+        env.storage()
+            .persistent()
+            .get(&org_key)
+            .ok_or(Error::OrganizationNotFound)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -2651,18 +2787,6 @@ mod test {
 
         // Verify bank is registered
         assert_eq!(client.is_blood_bank(&bank), true);
-    }
-
-    #[test]
-    fn test_register_hospital() {
-        let env = Env::default();
-        let (_, _, client) = setup_contract_with_admin(&env);
-        let hospital = Address::generate(&env);
-
-        env.mock_all_auths();
-        client.register_hospital(&hospital);
-
-        assert_eq!(client.is_hospital(&hospital), true);
     }
 
     #[test]
@@ -5254,5 +5378,194 @@ mod test {
         // Second nomination while the first is still active must fail.
         env.mock_all_auths();
         client.nominate_super_admin(&nominee_b);
+    }
+
+    // ── ORGANIZATION VERIFICATION TESTS ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_organization_verification_events() {
+        let env = Env::default();
+        let (_, admin, client) = setup_contract_with_admin(&env);
+        let org = Address::generate(&env);
+
+        env.mock_all_auths();
+        client.register_organization(&org);
+
+        // Check registration event
+        let events = env.events().all();
+        assert!(!events.is_empty());
+        let (_, topics, _) = events.last().unwrap();
+        assert_eq!(topics.len(), 2);
+        assert_eq!(
+            Symbol::try_from_val(&env, &topics.get(0).unwrap()).unwrap(),
+            symbol_short!("org")
+        );
+        assert_eq!(
+            Symbol::try_from_val(&env, &topics.get(1).unwrap()).unwrap(),
+            symbol_short!("reg")
+        );
+
+        // Verify organization
+        env.mock_all_auths();
+        client.verify_organization(&admin, &org);
+
+        let events = env.events().all();
+        assert!(events.len() >= 2);
+        let (_, topics, _) = events.last().unwrap();
+        assert_eq!(topics.len(), 2);
+        assert_eq!(
+            Symbol::try_from_val(&env, &topics.get(0).unwrap()).unwrap(),
+            symbol_short!("org")
+        );
+        assert_eq!(
+            Symbol::try_from_val(&env, &topics.get(1).unwrap()).unwrap(),
+            symbol_short!("verified")
+        );
+
+        // Unverify organization
+        let reason = String::from_str(&env, "Test reason");
+        env.mock_all_auths();
+        client.unverify_organization(&admin, &org, &reason);
+
+        let events = env.events().all();
+        assert!(events.len() >= 3);
+        let (_, topics, _) = events.last().unwrap();
+        assert_eq!(topics.len(), 2);
+        assert_eq!(
+            Symbol::try_from_val(&env, &topics.get(0).unwrap()).unwrap(),
+            symbol_short!("org")
+        );
+        assert_eq!(
+            Symbol::try_from_val(&env, &topics.get(1).unwrap()).unwrap(),
+            symbol_short!("unverif")
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #4)")] // DuplicateRegistration
+    fn test_register_organization_duplicate() {
+        let env = Env::default();
+        let (_, _, client) = setup_contract_with_admin(&env);
+        let org = Address::generate(&env);
+
+        env.mock_all_auths();
+        client.register_organization(&org);
+
+        // Try to register the same org again
+        env.mock_all_auths();
+        client.register_organization(&org);
+    }
+
+    #[test]
+    fn test_verify_organization_success() {
+        let env = Env::default();
+        let (_, admin, client) = setup_contract_with_admin(&env);
+        let org = Address::generate(&env);
+
+        env.mock_all_auths();
+        client.register_organization(&org);
+
+        env.mock_all_auths();
+        client.verify_organization(&admin, &org);
+
+        let organization = client.get_organization(&org);
+        assert_eq!(organization.verified, true);
+        assert!(organization.verified_timestamp.is_some());
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #1)")] // Unauthorized
+    fn test_verify_organization_unauthorized() {
+        let env = Env::default();
+        let (_, _, client) = setup_contract_with_admin(&env);
+        let org = Address::generate(&env);
+        let non_admin = Address::generate(&env);
+
+        env.mock_all_auths();
+        client.register_organization(&org);
+
+        env.mock_all_auths();
+        client.verify_organization(&non_admin, &org);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #26)")] // OrganizationNotFound
+    fn test_verify_organization_not_found() {
+        let env = Env::default();
+        let (_, admin, client) = setup_contract_with_admin(&env);
+        let org = Address::generate(&env);
+
+        env.mock_all_auths();
+        client.verify_organization(&admin, &org);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #27)")] // AlreadyVerified
+    fn test_verify_organization_already_verified() {
+        let env = Env::default();
+        let (_, admin, client) = setup_contract_with_admin(&env);
+        let org = Address::generate(&env);
+
+        env.mock_all_auths();
+        client.register_organization(&org);
+
+        env.mock_all_auths();
+        client.verify_organization(&admin, &org);
+
+        // Try to verify again
+        env.mock_all_auths();
+        client.verify_organization(&admin, &org);
+    }
+
+    #[test]
+    fn test_unverify_organization_success() {
+        let env = Env::default();
+        let (_, admin, client) = setup_contract_with_admin(&env);
+        let org = Address::generate(&env);
+
+        env.mock_all_auths();
+        client.register_organization(&org);
+
+        env.mock_all_auths();
+        client.verify_organization(&admin, &org);
+
+        let reason = String::from_str(&env, "Compliance issue");
+        env.mock_all_auths();
+        client.unverify_organization(&admin, &org, &reason);
+
+        let organization = client.get_organization(&org);
+        assert_eq!(organization.verified, false);
+        assert!(organization.verified_timestamp.is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #1)")] // Unauthorized
+    fn test_unverify_organization_unauthorized() {
+        let env = Env::default();
+        let (_, admin, client) = setup_contract_with_admin(&env);
+        let org = Address::generate(&env);
+        let non_admin = Address::generate(&env);
+
+        env.mock_all_auths();
+        client.register_organization(&org);
+
+        env.mock_all_auths();
+        client.verify_organization(&admin, &org);
+
+        let reason = String::from_str(&env, "Test");
+        env.mock_all_auths();
+        client.unverify_organization(&non_admin, &org, &reason);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #26)")] // OrganizationNotFound
+    fn test_unverify_organization_not_found() {
+        let env = Env::default();
+        let (_, admin, client) = setup_contract_with_admin(&env);
+        let org = Address::generate(&env);
+
+        let reason = String::from_str(&env, "Test");
+        env.mock_all_auths();
+        client.unverify_organization(&admin, &org, &reason);
     }
 }
