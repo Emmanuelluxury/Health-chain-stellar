@@ -18,6 +18,26 @@ pub enum PaymentStatus {
 }
 
 #[contracttype]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DisputeReason {
+    FailedDelivery,
+    TemperatureExcursion,
+    PaymentContested,
+    WrongItem,
+    DamagedGoods,
+    LateDelivery,
+    Other,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DisputeMetadata {
+    pub reason: DisputeReason,
+    pub case_id: String,
+    pub resolved: bool,
+}
+
+#[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Payment {
     pub id: u64,
@@ -28,6 +48,7 @@ pub struct Payment {
     pub status: PaymentStatus,
     pub created_at: u64,
     pub updated_at: u64,
+    pub dispute_metadata: Option<DisputeMetadata>,
 }
 
 #[contracttype]
@@ -169,6 +190,7 @@ impl PaymentContract {
             status: PaymentStatus::Pending,
             created_at: now,
             updated_at: now,
+            dispute_metadata: None,
         };
 
         store_payment(&env, &payment);
@@ -248,6 +270,44 @@ impl PaymentContract {
         payment.status = status;
         payment.updated_at = env.ledger().timestamp();
         store_payment(&env, &payment);
+        Ok(())
+    }
+
+    /// Record a dispute against a payment with reason taxonomy and case reference.
+    pub fn record_dispute(
+        env: Env,
+        payment_id: u64,
+        reason: DisputeReason,
+        case_id: String,
+    ) -> Result<(), Error> {
+        let mut payment = load_payment(&env, payment_id).ok_or(Error::PaymentNotFound)?;
+        payment.status = PaymentStatus::Disputed;
+        payment.dispute_metadata = Some(DisputeMetadata { reason, case_id: case_id.clone(), resolved: false });
+        payment.updated_at = env.ledger().timestamp();
+        store_payment(&env, &payment);
+
+        env.events().publish(
+            (symbol_short!("payment"), symbol_short!("disputed")),
+            (payment_id, case_id),
+        );
+
+        Ok(())
+    }
+
+    /// Mark a disputed payment's case as resolved.
+    pub fn resolve_dispute(env: Env, payment_id: u64) -> Result<(), Error> {
+        let mut payment = load_payment(&env, payment_id).ok_or(Error::PaymentNotFound)?;
+        if let Some(ref mut meta) = payment.dispute_metadata {
+            meta.resolved = true;
+        }
+        payment.updated_at = env.ledger().timestamp();
+        store_payment(&env, &payment);
+
+        env.events().publish(
+            (symbol_short!("payment"), symbol_short!("resolved")),
+            payment_id,
+        );
+
         Ok(())
     }
 
