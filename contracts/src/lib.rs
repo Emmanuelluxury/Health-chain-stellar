@@ -1,7 +1,7 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, vec, Address, Env, Map,
-    String, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, symbol_short, vec, Address, Bytes, Env,
+    Map, String, Symbol, Vec,
 };
 
 pub mod constants;
@@ -300,7 +300,8 @@ pub struct DisputeRaisedEvent {
     pub dispute_id: u64,
     pub payment_id: u64,
     pub raised_by: Address,
-    pub reason: Symbol,
+    pub reason: String,
+    pub evidence_digest: Bytes,
     pub timestamp: u64,
 }
 
@@ -1691,8 +1692,9 @@ impl HealthChainContract {
         env: Env,
         payment_id: u64,
         raised_by: Address,
-        reason: Symbol,
-        evidence_hash: Symbol,
+        reason: String,
+        evidence_digest: Bytes,
+        evidence_ref_chunks: Vec<String>,
     ) -> Result<u64, Error> {
         raised_by.require_auth();
 
@@ -1720,7 +1722,8 @@ impl HealthChainContract {
             raised_by: raised_by.clone(),
             status: DisputeStatus::Open,
             reason: reason.clone(),
-            evidence_hash,
+            evidence_digest: evidence_digest.clone(),
+            evidence_ref_chunks: evidence_ref_chunks.clone(),
             raised_at: env.ledger().timestamp(),
             resolved_at: None,
         };
@@ -1762,6 +1765,7 @@ impl HealthChainContract {
                 payment_id,
                 raised_by,
                 reason,
+                evidence_digest,
                 timestamp: env.ledger().timestamp(),
             },
         );

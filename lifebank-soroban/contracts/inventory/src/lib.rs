@@ -189,15 +189,27 @@ impl InventoryContract {
             storage::get_blood_unit(&env, unit_id).ok_or(ContractError::NotFound)?;
 
         let current_time = env.ledger().timestamp();
+        let old_status = blood_unit.status;
 
+        // Block supply-chain use of calendar-expired units except for explicit
+        // expiry/disposal transitions that the state machine already allows.
         if blood_unit.is_expired(current_time) {
-            return Err(ContractError::BloodUnitExpired);
+            let allowed_past_shelf = matches!(
+                (old_status, new_status),
+                (BloodStatus::Available, BloodStatus::Expired)
+                    | (BloodStatus::Reserved, BloodStatus::Expired)
+                    | (BloodStatus::InTransit, BloodStatus::Expired)
+                    | (BloodStatus::Expired, BloodStatus::Disposed)
+                    | (BloodStatus::Compromised, BloodStatus::Disposed)
+            );
+            if !allowed_past_shelf {
+                return Err(ContractError::BloodUnitExpired);
+            }
         }
 
         // Validate the transition using the pure is_valid_transition function.
-        // This covers terminal state checks (Delivered/Expired cannot transition)
+        // This covers terminal state checks (Delivered/Disposed cannot transition)
         // as well as all illegal backwards transitions.
-        let old_status = blood_unit.status;
         if !is_valid_transition(&old_status, &new_status) {
             // Emit an event with both statuses for debuggability before returning error
             events::emit_invalid_transition(&env, unit_id, old_status, new_status);
@@ -308,11 +320,21 @@ impl InventoryContract {
             let mut blood_unit =
                 storage::get_blood_unit(&env, unit_id).ok_or(ContractError::NotFound)?;
 
+            let old_status = blood_unit.status;
             if blood_unit.is_expired(current_time) {
-                return Err(ContractError::BloodUnitExpired);
+                let allowed_past_shelf = matches!(
+                    (old_status, new_status),
+                    (BloodStatus::Available, BloodStatus::Expired)
+                        | (BloodStatus::Reserved, BloodStatus::Expired)
+                        | (BloodStatus::InTransit, BloodStatus::Expired)
+                        | (BloodStatus::Expired, BloodStatus::Disposed)
+                        | (BloodStatus::Compromised, BloodStatus::Disposed)
+                );
+                if !allowed_past_shelf {
+                    return Err(ContractError::BloodUnitExpired);
+                }
             }
 
-            let old_status = blood_unit.status;
             if !is_valid_transition(&old_status, &new_status) {
                 events::emit_invalid_transition(&env, unit_id, old_status, new_status);
                 return Err(ContractError::InvalidStatusTransition);
